@@ -22,22 +22,25 @@ func index(c *gin.Context) {
 }
 
 type Recorder struct {
-	file  *os.File
-	muxer *flv.Muxer
+	flvfile      *os.File
+	h264file     *os.File
+	muxer        *flv.Muxer
 	audioBuilder *samplebuilder.SampleBuilder
 	videoBuilder *samplebuilder.SampleBuilder
 }
 
 func newRecorder(filename string) *Recorder {
-	file,err := os.Create(filename)
+	file, err := os.Create(filename)
+	h264file, err := os.Create("test.h264")
 	if err != nil {
 		panic(err)
 	}
 	return &Recorder{
-		file:         file,
+		flvfile:      file,
+		h264file:     h264file,
 		muxer:        flv.NewMuxer(file),
 		audioBuilder: samplebuilder.New(20, &codecs.OpusPacket{}),
-		videoBuilder: samplebuilder.New(20,&codecs.H264Packet{}),
+		videoBuilder: samplebuilder.New(20, &codecs.H264Packet{}),
 	}
 }
 
@@ -50,7 +53,7 @@ func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 		if sample == nil {
 			return
 		}
-		fmt.Println("audio sample ", sample.Samples)
+
 	}
 }
 
@@ -63,13 +66,18 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 		if sample == nil {
 			return
 		}
-		fmt.Println("video sample ", sample.Samples)
+		fmt.Println("video sample ", sample.Samples, len(sample.Data))
+
+		r.h264file.Write(sample.Data)
 	}
 }
 
 func (r *Recorder) Close() {
-	if r.file != nil {
-		r.file.Close()
+	if r.flvfile != nil {
+		r.flvfile.Close()
+	}
+	if r.h264file != nil {
+		r.h264file.Close()
 	}
 }
 
@@ -122,7 +130,7 @@ func publishStream(c *gin.Context) {
 		fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().Name)
 
 		for {
-			rtp,readErr := track.ReadRTP()
+			rtp, readErr := track.ReadRTP()
 			if readErr != nil {
 				if readErr == io.EOF {
 					return
