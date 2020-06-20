@@ -8,10 +8,80 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v2"
-	"github.com/pion/webrtc/v2/pkg/media/samplebuilder"
 	"io"
 	"os"
 )
+
+var startBytes = []byte{0x00, 0x00, 0x00, 0x01}
+
+
+type RTPJitter struct {
+	clockrate    uint32
+	cap          uint16
+	packetsCount uint32
+	nextSeqNum   uint16
+	packets      []*rtp.Packet
+	packetsSeqs  []uint16
+
+	lastTime uint32
+	nextTime uint32
+
+	maxWaitTime uint32
+	clockInMS   uint32
+}
+
+// cap maybe 512 or 1024 or more
+func NewJitter(cap uint16, clockrate uint32) *RTPJitter {
+	jitter := &RTPJitter{}
+	jitter.packets = make([]*rtp.Packet, cap)
+	jitter.packetsSeqs = make([]uint16, cap)
+	jitter.cap = cap
+	jitter.clockrate = clockrate
+	jitter.clockInMS = clockrate / 1000
+	jitter.maxWaitTime = 100
+	return jitter
+}
+
+func (self *RTPJitter) Add(packet *rtp.Packet) bool {
+
+	idx := packet.SequenceNumber % self.cap
+	self.packets[idx] = packet
+	self.packetsSeqs[idx] = packet.SequenceNumber
+
+	if self.packetsCount == 0 {
+		self.nextSeqNum = packet.SequenceNumber - 1
+		self.nextTime = packet.Timestamp
+	}
+
+	self.lastTime = packet.Timestamp
+	self.packetsCount++
+	return true
+}
+
+func (self *RTPJitter) SetMaxWaitTime(wait uint32) {
+	self.maxWaitTime = wait
+}
+
+func (self *RTPJitter) GetOrdered() (out []*rtp.Packet) {
+	nextSeq := self.nextSeqNum + 1
+	for {
+		idx := nextSeq % self.cap
+		if self.packetsSeqs[idx] != nextSeq {
+			// if we reach max wait time
+			if (self.lastTime - self.nextTime) > self.maxWaitTime*self.clockInMS {
+				nextSeq++
+				continue
+			}
+			break
+		}
+		packet := self.packets[idx]
+		out = append(out, packet)
+		self.nextTime = packet.Timestamp
+		self.nextSeqNum = nextSeq
+		nextSeq++
+	}
+	return
+}
 
 func test(c *gin.Context) {
 	c.String(200, "Hello World")
@@ -22,11 +92,12 @@ func index(c *gin.Context) {
 }
 
 type Recorder struct {
-	flvfile      *os.File
-	h264file     *os.File
-	muxer        *flv.Muxer
-	audioBuilder *samplebuilder.SampleBuilder
-	videoBuilder *samplebuilder.SampleBuilder
+	flvfile       *os.File
+	h264file      *os.File
+	muxer         *flv.Muxer
+	audiojitter   *RTPJitter
+	videojitter   *RTPJitter
+	h264Unmarshal *codecs.H264Packet
 }
 
 func newRecorder(filename string) *Recorder {
@@ -36,39 +107,30 @@ func newRecorder(filename string) *Recorder {
 		panic(err)
 	}
 	return &Recorder{
-		flvfile:      file,
-		h264file:     h264file,
-		muxer:        flv.NewMuxer(file),
-		audioBuilder: samplebuilder.New(20, &codecs.OpusPacket{}),
-		videoBuilder: samplebuilder.New(20, &codecs.H264Packet{}),
+		flvfile:       file,
+		h264file:      h264file,
+		muxer:         flv.NewMuxer(file),
+		audiojitter:   NewJitter(512, 48000),
+		videojitter:   NewJitter(512, 90000),
+		h264Unmarshal: &codecs.H264Packet{},
 	}
 }
 
 func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 
-	r.audioBuilder.Push(pkt)
-
-	for {
-		sample := r.audioBuilder.Pop()
-		if sample == nil {
-			return
-		}
-
-	}
 }
 
 func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 
-	r.videoBuilder.Push(pkt)
+	r.videojitter.Add(pkt)
+	pkts := r.videojitter.GetOrdered()
 
-	for {
-		sample := r.videoBuilder.Pop()
-		if sample == nil {
-			return
+	if pkts != nil {
+		for _, _pkt := range pkts {
+			fmt.Println("seq", pkt.SequenceNumber)
+			buf,_ := r.h264Unmarshal.Unmarshal(_pkt.Payload)
+			r.h264file.Write(buf)
 		}
-		fmt.Println("video sample ", sample.Samples, len(sample.Data))
-
-		r.h264file.Write(sample.Data)
 	}
 }
 
