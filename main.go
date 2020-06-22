@@ -14,7 +14,6 @@ import (
 
 var startBytes = []byte{0x00, 0x00, 0x00, 0x01}
 
-
 type RTPJitter struct {
 	clockrate    uint32
 	cap          uint16
@@ -83,6 +82,40 @@ func (self *RTPJitter) GetOrdered() (out []*rtp.Packet) {
 	return
 }
 
+type RTPDepacketizer struct {
+	frame         []byte
+	timestamp     uint32
+	h264Unmarshal *codecs.H264Packet
+}
+
+func NewDepacketizer() *RTPDepacketizer {
+	return &RTPDepacketizer{
+		frame:         make([]byte, 0),
+		h264Unmarshal: &codecs.H264Packet{},
+	}
+}
+
+func (self *RTPDepacketizer) AddPacket(pkt *rtp.Packet) ([]byte, uint32) {
+
+	ts := pkt.Timestamp
+
+	if self.timestamp != ts {
+		self.frame = make([]byte, 0)
+	}
+
+	self.timestamp = ts
+
+	buf, _ := self.h264Unmarshal.Unmarshal(pkt.Payload)
+
+	self.frame = append(self.frame, buf...)
+
+	if !pkt.Marker {
+		return nil, 0
+	}
+
+	return self.frame, self.timestamp
+}
+
 func test(c *gin.Context) {
 	c.String(200, "Hello World")
 }
@@ -98,6 +131,7 @@ type Recorder struct {
 	audiojitter   *RTPJitter
 	videojitter   *RTPJitter
 	h264Unmarshal *codecs.H264Packet
+	depacketizer  *RTPDepacketizer
 }
 
 func newRecorder(filename string) *Recorder {
@@ -113,6 +147,7 @@ func newRecorder(filename string) *Recorder {
 		audiojitter:   NewJitter(512, 48000),
 		videojitter:   NewJitter(512, 90000),
 		h264Unmarshal: &codecs.H264Packet{},
+		depacketizer:  NewDepacketizer(),
 	}
 }
 
@@ -125,10 +160,23 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 	r.videojitter.Add(pkt)
 	pkts := r.videojitter.GetOrdered()
 
+	//if pkts != nil {
+	//	for _, _pkt := range pkts {
+	//		frame, _ := r.depacketizer.AddPacket(_pkt)
+	//		if frame != nil {
+	//			fmt.Println("Write frame ", len(frame))
+	//			r.h264file.Write(frame)
+	//		}
+	//	}
+	//}
+
 	if pkts != nil {
 		for _, _pkt := range pkts {
-			fmt.Println("seq", pkt.SequenceNumber)
-			buf,_ := r.h264Unmarshal.Unmarshal(_pkt.Payload)
+			fmt.Println("seq", _pkt.SequenceNumber)
+			buf, err := r.h264Unmarshal.Unmarshal(_pkt.Payload)
+			if err != nil {
+				fmt.Println(err)
+			}
 			r.h264file.Write(buf)
 		}
 	}
@@ -215,6 +263,7 @@ func publishStream(c *gin.Context) {
 		},
 	})
 }
+
 
 func main() {
 
