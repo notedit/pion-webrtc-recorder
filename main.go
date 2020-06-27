@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/notedit/rtmp/av"
+	"github.com/notedit/rtmp/codec/h264"
 	"github.com/notedit/rtmp/format/flv"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v2"
 	"io"
 	"os"
+	"time"
 )
 
 var startBytes = []byte{0x00, 0x00, 0x00, 0x01}
@@ -125,6 +128,7 @@ func index(c *gin.Context) {
 }
 
 type Recorder struct {
+	started       bool
 	flvfile       *os.File
 	h264file      *os.File
 	muxer         *flv.Muxer
@@ -132,6 +136,9 @@ type Recorder struct {
 	videojitter   *RTPJitter
 	h264Unmarshal *codecs.H264Packet
 	depacketizer  *RTPDepacketizer
+	h264Codec     *h264.Codec
+	decodeConfig  av.Packet
+	startTime     time.Time
 }
 
 func newRecorder(filename string) *Recorder {
@@ -140,14 +147,32 @@ func newRecorder(filename string) *Recorder {
 	if err != nil {
 		panic(err)
 	}
+
+	muxer := flv.NewMuxer(file)
+	muxer.HasAudio = false
+	muxer.HasVideo = true
+	muxer.Publishing = true
+	muxer.WriteFileHeader()
+
+
+
+
+	decodeConfig := av.Packet{
+		Type:       av.H264DecoderConfig,
+		IsKeyFrame: true,
+	}
+
 	return &Recorder{
 		flvfile:       file,
 		h264file:      h264file,
-		muxer:         flv.NewMuxer(file),
+		muxer:         muxer,
 		audiojitter:   NewJitter(512, 48000),
 		videojitter:   NewJitter(512, 90000),
 		h264Unmarshal: &codecs.H264Packet{},
 		depacketizer:  NewDepacketizer(),
+		h264Codec:     h264.NewCodec(),
+		decodeConfig:  decodeConfig,
+		startTime:     time.Now(),
 	}
 }
 
@@ -160,26 +185,72 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 	r.videojitter.Add(pkt)
 	pkts := r.videojitter.GetOrdered()
 
-	//if pkts != nil {
-	//	for _, _pkt := range pkts {
-	//		frame, _ := r.depacketizer.AddPacket(_pkt)
-	//		if frame != nil {
-	//			fmt.Println("Write frame ", len(frame))
-	//			r.h264file.Write(frame)
-	//		}
-	//	}
-	//}
-
 	if pkts != nil {
 		for _, _pkt := range pkts {
-			fmt.Println("seq", _pkt.SequenceNumber)
-			buf, err := r.h264Unmarshal.Unmarshal(_pkt.Payload)
-			if err != nil {
-				fmt.Println(err)
+			frame, timestamp := r.depacketizer.AddPacket(_pkt)
+			if frame != nil {
+
+				fmt.Println("Write frame ", timestamp, len(frame))
+
+				nalus, _ := h264.SplitNALUs(frame)
+
+				nalus_ := make([][]byte, 0)
+				keyframe := false
+
+				for _, nalu := range nalus {
+					fmt.Println(h264.NALUTypeString(h264.NALUType(nalu)))
+					switch h264.NALUType(nalu) {
+					case h264.NALU_SPS:
+						r.h264Codec.AddSPSPPS(nalu)
+					case h264.NALU_PPS:
+						r.h264Codec.AddSPSPPS(nalu)
+						r.decodeConfig.Data = make([]byte, 5000)
+						var len int
+						r.h264Codec.ToConfig(r.decodeConfig.Data, &len)
+						r.decodeConfig.Data = r.decodeConfig.Data[0:len]
+					case h264.NALU_IDR:
+						r.muxer.WritePacket(r.decodeConfig)
+						nalus_ = append(nalus_, nalu)
+						keyframe = true
+					case h264.NALU_NONIDR:
+						nalus_ = append(nalus_, nalu)
+						keyframe = false
+					case h264.NALU_SEI:
+						continue
+					}
+				}
+
+				if len(nalus_) == 0 {
+					continue
+				}
+
+				duration := time.Since(r.startTime)
+				data := h264.FillNALUsAVCC(nalus_)
+				avpkt := av.Packet{
+					Type:       av.H264,
+					IsKeyFrame: keyframe,
+					Time:       duration,
+					CTime:      duration,
+					Data:       data,
+				}
+
+				r.muxer.WritePacket(avpkt)
+				r.h264file.Write(frame)
 			}
-			r.h264file.Write(buf)
 		}
 	}
+
+	//if pkts != nil {
+	//	for _, _pkt := range pkts {
+	//		fmt.Println("seq", _pkt.SequenceNumber)
+	//		buf, err := r.h264Unmarshal.Unmarshal(_pkt.Payload)
+	//		if err != nil {
+	//			fmt.Println(err)
+	//		}
+	//		r.h264file.Write(buf)
+	//	}
+	//}
+	//
 }
 
 func (r *Recorder) Close() {
@@ -239,6 +310,8 @@ func publishStream(c *gin.Context) {
 
 		fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().Name)
 
+		first := true
+
 		for {
 			rtp, readErr := track.ReadRTP()
 			if readErr != nil {
@@ -251,6 +324,11 @@ func publishStream(c *gin.Context) {
 			case webrtc.RTPCodecTypeAudio:
 				recorder.PushAudio(rtp)
 			case webrtc.RTPCodecTypeVideo:
+				if first {
+					_rtp := track.FirstRtpPacket()
+					recorder.PushVideo(_rtp)
+					first = false
+				}
 				recorder.PushVideo(rtp)
 			}
 		}
@@ -263,6 +341,7 @@ func publishStream(c *gin.Context) {
 		},
 	})
 }
+
 
 
 func main() {
