@@ -120,6 +120,8 @@ github.com/neelance/astrewrite v0.0.0-20160511093645-99348263ae86/go.mod h1:kHJE
 github.com/neelance/sourcemap v0.0.0-20151028013722-8c68805598ab/go.mod h1:Qr6/a/Q4r9LP1IltGz7tA7iOK1WonHEYhu1HRBA7ZiM=
 github.com/notedit/gst v0.0.5 h1:gnQn0T1IeQQ3oEIToQIwAgErO2TBHT00A9TsI13/ly4=
 github.com/notedit/gst v0.0.5/go.mod h1:99yZ0oIrCg0xd2a1rn/1cjcUAHLAGTDxXLD1FQ5NpoM=
+github.com/notedit/resample v0.0.6 h1:dw1JBdheiJ6yTTV3EE02019C5ayZ8m+fmR15PRY0Dz0=
+github.com/notedit/resample v0.0.6/go.mod h1:Zk+DYg8q6kbJZQ3yAIVNCO6zCuTv7BcCtXJvXT+Fci4=
 github.com/notedit/rtmp v0.0.2 h1:5+to4yezKATiJgnrcETu9LbV5G/QsWkOV9Ts2M/p33w=
 github.com/notedit/rtmp v0.0.2/go.mod h1:vzuE21rowz+lT1NGsWbreIvYulgBpCGnQyeTyFblUHc=
 github.com/onsi/ginkgo v1.6.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=

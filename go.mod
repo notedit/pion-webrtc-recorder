@@ -8,6 +8,7 @@ require (
 	github.com/golang/protobuf v1.4.2 // indirect
 	github.com/lucas-clemente/quic-go v0.16.1 // indirect
 	github.com/notedit/gst v0.0.5 // indirect
+	github.com/notedit/resample v0.0.6 // indirect
 	github.com/notedit/rtmp v0.0.2 // indirect
 	github.com/pion/stun v0.3.5 // indirect
 	github.com/pion/webrtc/v2 v2.2.15 // indirect
