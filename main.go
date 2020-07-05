@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/notedit/resample"
 	"github.com/notedit/rtmp/av"
+	"github.com/notedit/rtmp/codec/aac"
 	"github.com/notedit/rtmp/codec/h264"
 	"github.com/notedit/rtmp/format/flv"
 	"github.com/pion/rtp"
@@ -231,18 +233,21 @@ func index(c *gin.Context) {
 }
 
 type Recorder struct {
-	started       bool
-	flvfile       *os.File
-	h264file      *os.File
-	muxer         *flv.Muxer
-	audiojitter   *RTPJitter
-	videojitter   *RTPJitter
-	h264Unmarshal *codecs.H264Packet
-	depacketizer  *RTPDepacketizer
-	h264Codec     *h264.Codec
-	decodeConfig  av.Packet
-	startTime     time.Time
-	trans         *Transcode
+	audioFirst       bool
+	videoFirst       bool
+	flvfile          *os.File
+	h264file         *os.File
+	muxer            *flv.Muxer
+	audiojitter      *RTPJitter
+	videojitter      *RTPJitter
+	h264Unmarshal    *codecs.H264Packet
+	depacketizer     *RTPDepacketizer
+	h264Codec        *h264.Codec
+	aacCocec         *aac.Codec
+	h264decodeConfig av.Packet
+	aacdecodeConfig  av.Packet
+	startTime        time.Time
+	trans            *Transcode
 }
 
 func newRecorder(filename string) *Recorder {
@@ -253,7 +258,7 @@ func newRecorder(filename string) *Recorder {
 	}
 
 	muxer := flv.NewMuxer(file)
-	muxer.HasAudio = false
+	muxer.HasAudio = true
 	muxer.HasVideo = true
 	muxer.Publishing = true
 	muxer.WriteFileHeader()
@@ -273,36 +278,91 @@ func newRecorder(filename string) *Recorder {
 		fmt.Println(err)
 	}
 
-	decodeConfig := av.Packet{
-		Type:       av.H264DecoderConfig,
-		IsKeyFrame: true,
+	aacconfig := aac.MPEG4AudioConfig{
+		SampleRate:      48000,
+		ChannelLayout:   aac.CH_STEREO,
+		ObjectType:      2, //lowtype
+		SampleRateIndex: 3, //48000
+		ChannelConfig:   2, //left&right
 	}
 
+	aacCodec := &aac.Codec{
+		Config: aacconfig,
+	}
+
+	h264decodeConfig := av.Packet{
+		Type:       av.H264DecoderConfig,
+		IsKeyFrame: true,
+		H264: h264.NewCodec(),
+	}
+
+	aacdecodeConfig := av.Packet{
+		Type: av.AACDecoderConfig,
+		AAC: aacCodec,
+	}
+
+
 	return &Recorder{
-		flvfile:       file,
-		h264file:      h264file,
-		muxer:         muxer,
-		audiojitter:   NewJitter(512, 48000),
-		videojitter:   NewJitter(512, 90000),
-		h264Unmarshal: &codecs.H264Packet{},
-		depacketizer:  NewDepacketizer(),
-		h264Codec:     h264.NewCodec(),
-		decodeConfig:  decodeConfig,
-		startTime:     time.Now(),
-		trans:         trans,
+		flvfile:          file,
+		h264file:         h264file,
+		muxer:            muxer,
+		audiojitter:      NewJitter(512, 48000),
+		videojitter:      NewJitter(512, 90000),
+		h264Unmarshal:    &codecs.H264Packet{},
+		depacketizer:     NewDepacketizer(),
+		h264Codec:        h264.NewCodec(),
+		aacCocec:         aacCodec,
+		h264decodeConfig: h264decodeConfig,
+		aacdecodeConfig:  aacdecodeConfig,
+		startTime:        time.Now(),
+		trans:            trans,
 	}
 }
 
 func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 
-	r.audiojitter.Add(pkt)
+	if !r.audioFirst {
 
-	pkts := r.audiojitter.GetOrdered()
-	
-	for _, _pkt := range pkts {
-		_, err := r.trans.Do(_pkt.Payload)
+		audioConfigBuffer := bytes.NewBuffer([]byte{})
+		err := aac.WriteMPEG4AudioConfig(audioConfigBuffer, r.aacCocec.Config)
+
 		if err != nil {
 			fmt.Println(err)
+		}
+
+		r.aacCocec.ConfigBytes = audioConfigBuffer.Bytes()
+
+		fmt.Println(len(r.aacdecodeConfig.Data))
+
+		r.muxer.WritePacket(r.aacdecodeConfig)
+
+		r.audioFirst = true
+	}
+
+	r.audiojitter.Add(pkt)
+
+	_pkts := r.audiojitter.GetOrdered()
+
+	for _, _pkt := range _pkts {
+		pkts, err := r.trans.Do(_pkt.Payload)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		for _, pktdata := range pkts {
+			fmt.Println(len(pktdata))
+
+			duration := time.Since(r.startTime)
+			avpkt := av.Packet{
+				Type:  av.AAC,
+				Time:  duration,
+				CTime: duration,
+				Data:  pktdata,
+				AAC:   r.aacCocec,
+			}
+
+			r.muxer.WritePacket(avpkt)
 		}
 	}
 }
@@ -335,12 +395,12 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 						r.h264Codec.AddSPSPPS(nalu)
 					case h264.NALU_PPS:
 						r.h264Codec.AddSPSPPS(nalu)
-						r.decodeConfig.Data = make([]byte, 5000)
+						r.h264decodeConfig.Data = make([]byte, 5000)
 						var len int
-						r.h264Codec.ToConfig(r.decodeConfig.Data, &len)
-						r.decodeConfig.Data = r.decodeConfig.Data[0:len]
+						r.h264Codec.ToConfig(r.h264decodeConfig.Data, &len)
+						r.h264decodeConfig.Data = r.h264decodeConfig.Data[0:len]
 					case h264.NALU_IDR:
-						r.muxer.WritePacket(r.decodeConfig)
+						r.muxer.WritePacket(r.h264decodeConfig)
 						nalus_ = append(nalus_, nalu)
 						keyframe = true
 					case h264.NALU_NONIDR:
