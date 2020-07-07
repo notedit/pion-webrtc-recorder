@@ -242,8 +242,6 @@ type Recorder struct {
 	videojitter      *RTPJitter
 	h264Unmarshal    *codecs.H264Packet
 	depacketizer     *RTPDepacketizer
-	h264Codec        *h264.Codec
-	aacCocec         *aac.Codec
 	h264decodeConfig av.Packet
 	aacdecodeConfig  av.Packet
 	startTime        time.Time
@@ -310,8 +308,6 @@ func newRecorder(filename string) *Recorder {
 		videojitter:      NewJitter(512, 90000),
 		h264Unmarshal:    &codecs.H264Packet{},
 		depacketizer:     NewDepacketizer(),
-		h264Codec:        h264.NewCodec(),
-		aacCocec:         aacCodec,
 		h264decodeConfig: h264decodeConfig,
 		aacdecodeConfig:  aacdecodeConfig,
 		startTime:        time.Now(),
@@ -323,14 +319,14 @@ func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 
 	if !r.audioFirst {
 
-		audioConfigBuffer := bytes.NewBuffer([]byte{})
-		err := aac.WriteMPEG4AudioConfig(audioConfigBuffer, r.aacCocec.Config)
+		configBuffer := bytes.NewBuffer([]byte{})
+		err := aac.WriteMPEG4AudioConfig(configBuffer, r.aacdecodeConfig.AAC.Config)
 
 		if err != nil {
 			fmt.Println(err)
 		}
 
-		r.aacCocec.ConfigBytes = audioConfigBuffer.Bytes()
+		r.aacdecodeConfig.AAC.ConfigBytes = configBuffer.Bytes()
 
 		fmt.Println(len(r.aacdecodeConfig.Data))
 
@@ -358,7 +354,7 @@ func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 				Time:  duration,
 				CTime: duration,
 				Data:  pktdata,
-				AAC:   r.aacCocec,
+				AAC:   r.aacdecodeConfig.AAC,
 			}
 
 			r.muxer.WritePacket(avpkt)
@@ -386,12 +382,12 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 
 					switch h264.NALUType(nalu) {
 					case h264.NALU_SPS:
-						r.h264Codec.AddSPSPPS(nalu)
+						r.h264decodeConfig.H264.AddSPSPPS(nalu)
 					case h264.NALU_PPS:
-						r.h264Codec.AddSPSPPS(nalu)
+						r.h264decodeConfig.H264.AddSPSPPS(nalu)
 						r.h264decodeConfig.Data = make([]byte, 5000)
 						var len int
-						r.h264Codec.ToConfig(r.h264decodeConfig.Data, &len)
+						r.h264decodeConfig.H264.ToConfig(r.h264decodeConfig.Data, &len)
 						r.h264decodeConfig.Data = r.h264decodeConfig.Data[0:len]
 					case h264.NALU_IDR:
 						r.muxer.WritePacket(r.h264decodeConfig)
