@@ -236,7 +236,6 @@ type Recorder struct {
 	audioFirst       bool
 	videoFirst       bool
 	flvfile          *os.File
-	h264file         *os.File
 	muxer            *flv.Muxer
 	audiojitter      *RTPJitter
 	videojitter      *RTPJitter
@@ -250,7 +249,6 @@ type Recorder struct {
 
 func newRecorder(filename string) *Recorder {
 	file, err := os.Create(filename)
-	h264file, err := os.Create("test.h264")
 	if err != nil {
 		panic(err)
 	}
@@ -302,7 +300,6 @@ func newRecorder(filename string) *Recorder {
 
 	return &Recorder{
 		flvfile:          file,
-		h264file:         h264file,
 		muxer:            muxer,
 		audiojitter:      NewJitter(512, 48000),
 		videojitter:      NewJitter(512, 90000),
@@ -327,8 +324,7 @@ func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 		}
 
 		r.aacdecodeConfig.AAC.ConfigBytes = configBuffer.Bytes()
-
-		fmt.Println(len(r.aacdecodeConfig.Data))
+		r.aacdecodeConfig.Data = configBuffer.Bytes()
 
 		r.muxer.WritePacket(r.aacdecodeConfig)
 
@@ -416,7 +412,6 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 				}
 
 				r.muxer.WritePacket(avpkt)
-				r.h264file.Write(frame)
 			}
 		}
 	}
@@ -437,9 +432,6 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 func (r *Recorder) Close() {
 	if r.flvfile != nil {
 		r.flvfile.Close()
-	}
-	if r.h264file != nil {
-		r.h264file.Close()
 	}
 }
 
