@@ -351,7 +351,6 @@ func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 		}
 
 		for _, pktdata := range pkts {
-			fmt.Println(len(pktdata))
 
 			duration := time.Since(r.startTime)
 			avpkt := av.Packet{
@@ -369,19 +368,14 @@ func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 
 func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 
-	if true {
-		return
-	}
 
 	r.videojitter.Add(pkt)
 	pkts := r.videojitter.GetOrdered()
 
 	if pkts != nil {
 		for _, _pkt := range pkts {
-			frame, timestamp := r.depacketizer.AddPacket(_pkt)
+			frame, _ := r.depacketizer.AddPacket(_pkt)
 			if frame != nil {
-
-				fmt.Println("Write frame ", timestamp, len(frame))
 
 				nalus, _ := h264.SplitNALUs(frame)
 
@@ -389,7 +383,7 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 				keyframe := false
 
 				for _, nalu := range nalus {
-					fmt.Println(h264.NALUTypeString(h264.NALUType(nalu)))
+
 					switch h264.NALUType(nalu) {
 					case h264.NALU_SPS:
 						r.h264Codec.AddSPSPPS(nalu)
