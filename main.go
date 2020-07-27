@@ -12,7 +12,7 @@ import (
 	"github.com/notedit/rtmp/format/flv"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
-	"github.com/pion/webrtc/v2"
+	"github.com/notedit/webrtc-hack/v3"
 	"io"
 	"os"
 	"time"
@@ -25,12 +25,12 @@ type Transcode struct {
 	outSampleFormat resample.SampleFormat
 	enc             *resample.AudioEncoder
 	dec             *resample.AudioDecoder
-
-	inChannels    int
-	outChannels   int
-	outbitrate    int
-	inSampleRate  int
-	outSampleRate int
+	timelien        *resample.Timeline
+	inChannels      int
+	outChannels     int
+	outbitrate      int
+	inSampleRate    int
+	outSampleRate   int
 }
 
 func (t *Transcode) Setup() error {
@@ -245,6 +245,12 @@ type Recorder struct {
 	aacdecodeConfig  av.Packet
 	startTime        time.Time
 	trans            *Transcode
+
+	timeline *resample.Timeline
+
+	// order the packets
+	timestamps []uint32
+	frames     map[uint32][]*av.Packet
 }
 
 func newRecorder(filename string) *Recorder {
@@ -289,14 +295,13 @@ func newRecorder(filename string) *Recorder {
 	h264decodeConfig := av.Packet{
 		Type:       av.H264DecoderConfig,
 		IsKeyFrame: true,
-		H264: h264.NewCodec(),
+		H264:       h264.NewCodec(),
 	}
 
 	aacdecodeConfig := av.Packet{
 		Type: av.AACDecoderConfig,
-		AAC: aacCodec,
+		AAC:  aacCodec,
 	}
-
 
 	return &Recorder{
 		flvfile:          file,
@@ -309,6 +314,7 @@ func newRecorder(filename string) *Recorder {
 		aacdecodeConfig:  aacdecodeConfig,
 		startTime:        time.Now(),
 		trans:            trans,
+		timeline:         &resample.Timeline{},
 	}
 }
 
@@ -359,7 +365,6 @@ func (r *Recorder) PushAudio(pkt *rtp.Packet) {
 }
 
 func (r *Recorder) PushVideo(pkt *rtp.Packet) {
-
 
 	r.videojitter.Add(pkt)
 	pkts := r.videojitter.GetOrdered()
@@ -416,17 +421,6 @@ func (r *Recorder) PushVideo(pkt *rtp.Packet) {
 		}
 	}
 
-	//if pkts != nil {
-	//	for _, _pkt := range pkts {
-	//		fmt.Println("seq", _pkt.SequenceNumber)
-	//		buf, err := r.h264Unmarshal.Unmarshal(_pkt.Payload)
-	//		if err != nil {
-	//			fmt.Println(err)
-	//		}
-	//		r.h264file.Write(buf)
-	//	}
-	//}
-	//
 }
 
 func (r *Recorder) Close() {
