@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"os"
+	"time"
+
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/notedit/resample"
@@ -10,12 +14,9 @@ import (
 	"github.com/notedit/rtmp/codec/aac"
 	"github.com/notedit/rtmp/codec/h264"
 	"github.com/notedit/rtmp/format/flv"
+	"github.com/notedit/webrtc-hack/v3"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
-	"github.com/notedit/webrtc-hack/v3"
-	"io"
-	"os"
-	"time"
 )
 
 var startBytes = []byte{0x00, 0x00, 0x00, 0x01}
@@ -471,6 +472,10 @@ func publishStream(c *gin.Context) {
 	}
 	peerConnection.SetLocalDescription(answer)
 
+	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+
+	<-gatherComplete
+
 	recorder := newRecorder("record.flv")
 
 	peerConnection.OnTrack(func(track *webrtc.Track, receiver *webrtc.RTPReceiver) {
@@ -504,7 +509,7 @@ func publishStream(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"s": 10000,
 		"d": map[string]string{
-			"sdp": answer.SDP,
+			"sdp": peerConnection.LocalDescription().SDP,
 		},
 	})
 }
